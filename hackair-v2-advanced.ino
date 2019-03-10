@@ -29,13 +29,12 @@
 
 // Configuration
 
-#define HOSTNAME "hackair" // hostname to use for MDNS under the .local extension ( hackair.local )
+#define HOSTNAME "hackair"      // hostname to use for MDNS under the .local extension ( hackair.local )
 #define DEBUG "0"               // set this to 1 to stop sending data to the hackAIR platform
 #define ADAFRUIT_IO_ENABLE "0"  // set this to 1 to enable Adafruit.io sending
-#define INFLUXDB_ENABLE "0" // set this to 1 to enable InfluxDB support 
+#define INFLUXDB_ENABLE "0"     // set this to 1 to enable InfluxDB support 
 
 // Adafruit MQTT
-
 #define AIO_SERVER      "io.adafruit.com"
 #define AIO_SERVERPORT  8883
 #define AIO_USERNAME    "AIO_USERNAME"
@@ -44,7 +43,6 @@
 #define AIO_PM10        "PM10FEED"
 
 // InfluxDB support
-
 #define INFLUXDB_HOST ""
 #define INFLUXDB_PORT "8086"
 #define INFLUXDB_DATABASE "aq"
@@ -57,11 +55,11 @@ char hackair_api_token[44]; // hackAIR API token to be collected via WiFiManager
 char sensebox_id[40]; // openSenseMap senseBox ID
 char osem_token[80]; // openSenseMap senseBox access token
 
-//flag for saving data
+// flag for saving data
 bool shouldSaveConfig = false;
 
-//callback notifying us of the need to save config
-void saveConfigCallback () {
+// callback notifying us of the need to save config
+void saveConfigCallback() {
   Serial.println("Should save config");
   shouldSaveConfig = true;
 }
@@ -92,16 +90,13 @@ unsigned long previous_millis = 0;
 
 void setup() {
   // Open serial communications
-  
   Serial.begin(9600);
   Serial.println("\nHackAIR v2 sensor");
 
-  if ( DEBUG == "1" ) {
-
+  if (DEBUG == "1") {
     Serial.println("Debug mode on, not sending data to hackAIR");
-    
   }
-    
+
   Serial.println("Ready");
   Serial.print("IP address: ");
   Serial.println(WiFi.localIP());
@@ -109,11 +104,10 @@ void setup() {
   pinMode(BUILTIN_LED, OUTPUT);
 
   // read config from filesystem
-
-    if (SPIFFS.begin()) {
+  if (SPIFFS.begin()) {
     Serial.println("mounted file system");
     if (SPIFFS.exists("/config.json")) {
-      //file exists, reading and loading
+      // file exists, reading and loading
       Serial.println("reading config file");
       File configFile = SPIFFS.open("/config.json", "r");
       if (configFile) {
@@ -124,21 +118,20 @@ void setup() {
 
         configFile.readBytes(buf.get(), size);
         DynamicJsonBuffer jsonBuffer;
-        JsonObject& json = jsonBuffer.parseObject(buf.get());
+        JsonObject &json = jsonBuffer.parseObject(buf.get());
         json.prettyPrintTo(Serial);
         if (json.success()) {
           Serial.println("\nparsed json");
 
-          strcpy(hackair_api_token, json["hackair_api_token"]);  
+          strcpy(hackair_api_token, json["hackair_api_token"]);
 
-          const char* my_osem_token = json["osem_token"];
+          const char *my_osem_token = json["osem_token"];
           strcpy(osem_token, my_osem_token);
           Serial.println(osem_token);
 
-          const char* my_sensebox_id = json["sensebox_id"];
+          const char *my_sensebox_id = json["sensebox_id"];
           strcpy(sensebox_id, my_sensebox_id);
           Serial.println(sensebox_id);
-                 
         } else {
           Serial.println("failed to load json config");
         }
@@ -147,7 +140,7 @@ void setup() {
   } else {
     Serial.println("failed to mount FS");
   }
-  
+
   // Initialize the PM sensor
   sensor.begin();
   sensor.enablePowerControl();
@@ -181,20 +174,20 @@ void setup() {
     delay(10000);
   }
 
-  //read updated parameters
+  // read updated parameters
   strcpy(hackair_api_token, custom_hackair_api_token.getValue());
   strcpy(sensebox_id, custom_sensebox_id.getValue());
   strcpy(osem_token, custom_osem_token.getValue());
 
-  //save the custom parameters to FS
+  // save the custom parameters to FS
   if (shouldSaveConfig) {
     Serial.println("saving config");
     DynamicJsonBuffer jsonBuffer;
-    JsonObject& json = jsonBuffer.createObject();
+    JsonObject &json = jsonBuffer.createObject();
     json["hackair_api_token"] = hackair_api_token;
     json["sensebox_id"] = sensebox_id;
     json["osem_token"] = osem_token;
- 
+
     File configFile = SPIFFS.open("/config.json", "w");
     if (!configFile) {
       Serial.println("failed to open config file for writing");
@@ -203,9 +196,9 @@ void setup() {
     json.printTo(Serial);
     json.printTo(configFile);
     configFile.close();
-    //end save
+    // end save
   }
-  
+
   // check if we have connected to the WiFi
   Serial.println("Network connected");
   Serial.println("Local IP address: ");
@@ -213,14 +206,12 @@ void setup() {
   Serial.println("Default Gateway: ");
   Serial.print(WiFi.gatewayIP());
   MDNS.begin(HOSTNAME);
-  
 }
 
 void loop() {
-
   int chip_id = ESP.getChipId();
   float vdd = ESP.getVcc() / 500.0;
-  
+
   while (WiFi.status() != WL_CONNECTED) {
     WiFi.hostname("hackair");
     delay(500);
@@ -232,58 +223,49 @@ void loop() {
 
   float env_temp = dht.readTemperature();
   float env_hum = dht.readHumidity();
-  
+
   int error = 0;
   Serial.println("Measuring...");
 
-// Measure data
+  // Measure data
   sensor.clearData(data);
   sensor.readAverageData(data, 60); // 60 averages
 
   if (data.error != H_ERROR_SENSOR) {
-  // Compensate for humidity
-  float humidity = dht.readHumidity();
-  if (isnan(humidity)) {
-    data.error |= H_ERROR_HUMIDITY;
-  } else {
-    sensor.humidityCompensation(data, humidity);
-  }
+    // Compensate for humidity
+    float humidity = dht.readHumidity();
+    if (isnan(humidity)) {
+      data.error |= H_ERROR_HUMIDITY;
+    } else {
+      sensor.humidityCompensation(data, humidity);
+    }
   }
 
   // construct the JSON to send to the hackAIR platform
 
   String dataJson = "{\"reading\":{\"PM2.5_AirPollutantValue\":\"";
-    dataJson += data.pm25;
-    dataJson += "\",\"PM10_AirPollutantValue\":\"";
-    dataJson += data.pm10;
-    dataJson += "\"},\"battery\":\"";
-    dataJson += vdd;
-    dataJson += "\",\"tamper\":\"";
-    dataJson += "0";
-    dataJson += "\",\"error\":\"";
-    dataJson += data.error;
-    dataJson += "\"}";
+  dataJson += data.pm25;
+  dataJson += "\",\"PM10_AirPollutantValue\":\"";
+  dataJson += data.pm10;
+  dataJson += "\"},\"battery\":\"";
+  dataJson += vdd;
+  dataJson += "\",\"tamper\":\"";
+  dataJson += "0";
+  dataJson += "\",\"error\":\"";
+  dataJson += data.error;
+  dataJson += "\"}";
 
- 
-
-  if ( DEBUG != "1" ) {
-
+  if (DEBUG != "1") {
     // send data to network
 
-    if ( ADAFRUIT_IO_ENABLE == "1" ) {
-
-        MQTT_connect();
-        pm25_feed.publish(data.pm25);
-        pm10_feed.publish(data.pm10);
-        
+    if (ADAFRUIT_IO_ENABLE == "1") {
+      MQTT_connect();
+      pm25_feed.publish(data.pm25);
+      pm10_feed.publish(data.pm10);
     }
 
-    
-    
     // Send the data to the hackAIR server
-
     Serial.println("Sending data to hackAIR platform...");
-    
     if (client.connect("api.hackair.eu", 443)) {
       Serial.println("Connected to api.hackair.eu");
       client.print("POST /sensors/arduino/measurements HTTP/1.1\r\n");
@@ -300,66 +282,56 @@ void loop() {
       client.println(dataJson);
       Serial.println(dataJson);
       delay(500);
-      
-      while (client.available()) {
-        
-        char c = client.read();
-      
-      Serial.print(c);
-    }
-    client.stop();
-  } else {
-    
-    Serial.println("Unable to send data to hackAIR platform\n");
-  }
-  delay(1000);
-
-  // Send data to openSenseMap
-  if ( sensebox_id != "" && osem_token != "") {
-    // Send the data to the openSenseMap server
-    Serial.println("Sending data to openSenseMap platform...");
-    Serial.println(sensebox_id);
-    Serial.println("OSEM:\n");
-    Serial.println(osem_token);
-    Serial.println("\nEND\n");
-    
-    if (client.connect("api.opensensemap.org", 443)) {
-      Serial.println("Connected to api.opensensemap.org");
-      client.print("POST /boxes/");
-      client.print(sensebox_id);
-      client.print("/data?hackair=true HTTP/1.1\r\n");
-      client.print("Host: api.opensensemap.org\r\n");
-      client.print("Connection: close\r\n");
-      client.print("Authorization: ");
-      client.println(osem_token);
-      client.print("Cache-Control: no-cache\r\n");
-      client.print("Content-Type: application/json\r\n");
-      client.print("Content-Length: ");
-      client.println(dataJson.length() + 2);
-      client.println("");
-      client.println(dataJson);
-      Serial.println(dataJson);
-      delay(500);
 
       while (client.available()) {
         char c = client.read();
-
         Serial.print(c);
       }
-    }
-    client.stop();
-    delay(1000);
+      client.stop();
     } else {
-        
-      Serial.println("Unable to send data to openSenseMap platform\n");
-      
+      Serial.println("Unable to send data to hackAIR platform\n");
     }
-   
-   
+    delay(1000);
+
+    // Send data to openSenseMap
+    if (sensebox_id != "" && osem_token != "") {
+      // Send the data to the openSenseMap server
+      Serial.println("Sending data to openSenseMap platform...");
+      Serial.println(sensebox_id);
+      Serial.println("OSEM:\n");
+      Serial.println(osem_token);
+      Serial.println("\nEND\n");
+
+      if (client.connect("api.opensensemap.org", 443)) {
+        Serial.println("Connected to api.opensensemap.org");
+        client.print("POST /boxes/");
+        client.print(sensebox_id);
+        client.print("/data?hackair=true HTTP/1.1\r\n");
+        client.print("Host: api.opensensemap.org\r\n");
+        client.print("Connection: close\r\n");
+        client.print("Authorization: ");
+        client.println(osem_token);
+        client.print("Cache-Control: no-cache\r\n");
+        client.print("Content-Type: application/json\r\n");
+        client.print("Content-Length: ");
+        client.println(dataJson.length() + 2);
+        client.println("");
+        client.println(dataJson);
+        Serial.println(dataJson);
+        delay(500);
+
+        while (client.available()) {
+          char c = client.read();
+          Serial.print(c);
+        }
+      }
+      client.stop();
+      delay(1000);
+    } else {
+      Serial.println("Unable to send data to openSenseMap platform\n");
+    }
   } else {
-
     // DEBUG is on, output values to serial but don't send to network
-
     Serial.println("DEBUG");
     Serial.println(DEBUG);
     Serial.print("hackair API token: ");
@@ -372,17 +344,15 @@ void loop() {
     Serial.println(env_hum);
     Serial.println(dataJson); // write sensor values to serial for debug
 
-    if ( INFLUXDB_ENABLE == "1" ) {
-
+    if (INFLUXDB_ENABLE == "1") {
       // connect to influxdb
-
       Influxdb influx(INFLUXDB_HOST); // port defaults to 8086
       influx.setDbAuth(INFLUXDB_DATABASE, INFLUXDB_USER, INFLUXDB_PASS); // with authentication
 
       String influx_chip_id = String(chip_id);
-      
+
       // create a measurement object
-      InfluxData measurement ("airquality");
+      InfluxData measurement("airquality");
       measurement.addTag("device", influx_chip_id);
       measurement.addTag("sensor", "sds11");
       measurement.addValue("pm10", data.pm10);
@@ -394,19 +364,15 @@ void loop() {
       influx.write(measurement);
 
       client.println("Writing to InfluxDB");
+    }
+  }
 
-    }
-      
-    }
-    
   // Turn off sensor and go to sleep
   sensor.turnOff();
   unsigned long current_millis = millis();
-  while (current_millis <
-         (previous_millis + (minutes_time_interval * 60 * 1000))) {
+  while (current_millis < (previous_millis + (minutes_time_interval * 60 * 1000))) {
     delay(10000);
     current_millis = millis();
-    
   }
   previous_millis = current_millis;
   sensor.turnOn();
@@ -426,16 +392,16 @@ void MQTT_connect() {
 
   uint8_t retries = 3;
   while ((ret = mqtt.connect()) != 0) { // connect will return 0 for connected
-       Serial.println(mqtt.connectErrorString(ret));
-       Serial.println(ret);
-       Serial.println("Retrying MQTT connection in 5 seconds...");
-       mqtt.disconnect();
-       delay(5000);  // wait 5 seconds
-       retries--;
-       if (retries == 0) {
-         // basically die and wait for WDT to reset me
-         while (1);
-       }
+    Serial.println(mqtt.connectErrorString(ret));
+    Serial.println(ret);
+    Serial.println("Retrying MQTT connection in 5 seconds...");
+    mqtt.disconnect();
+    delay(5000); // wait 5 seconds
+    retries--;
+    if (retries == 0) {
+      // basically die and wait for WDT to reset me
+      while (true) ;
+    }
   }
 
   Serial.println("MQTT Connected!");

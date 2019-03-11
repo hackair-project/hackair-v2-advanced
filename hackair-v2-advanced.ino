@@ -12,7 +12,8 @@
  * in the Public Domain.
  */
 
-#undef INFLUXDB_SUPPORT // Change "#undef" to "#define" to enable InfluxDB support
+#undef ADAFRUIT_MQTT_SUPPORT // Change "#undef" to "#define" to enable MQTT support
+#undef INFLUXDB_SUPPORT      // Change "#undef" to "#define" to enable InfluxDB support
 
 #include <Arduino.h>
 #include <DHT.h>                  // Adafruit's DHT sensor library https://github.com/adafruit/DHT-sensor-library
@@ -24,8 +25,10 @@
 #include <WiFiClientSecure.h>     // Variant of WiFiClient with TLS support (from ESP82266 core wifi)
 #include <WiFiManager.h>          // https://github.com/tzapu/WiFiManager
 #include <hackair.h>              // https://github.com/hackair-project/hackAir-Arduino
-#include "Adafruit_MQTT.h"        // Adafruit.io MQTT library
-#include "Adafruit_MQTT_Client.h" // Adafruit.io MQTT library
+#ifdef ADAFRUIT_MQTT_SUPPORT
+# include "Adafruit_MQTT.h"        // Adafruit.io MQTT library
+# include "Adafruit_MQTT_Client.h" // Adafruit.io MQTT library
+#endif // ADAFRUIT_MQTT_SUPPORT
 #include <ArduinoJson.h>          // https://github.com/bblanchon/ArduinoJson
 #ifdef INFLUXDB_SUPPORT
 # include <InfluxDb.h>             // InfluxDB support
@@ -35,15 +38,16 @@
 
 #define HOSTNAME "hackair"      // hostname to use for MDNS under the .local extension ( hackair.local )
 #define DEBUG "0"               // set this to 1 to stop sending data to the hackAIR platform
-#define ADAFRUIT_IO_ENABLE "0"  // set this to 1 to enable Adafruit.io sending
 
+#ifdef ADAFRUIT_MQTT_SUPPORT
 // Adafruit MQTT
-#define AIO_SERVER      "io.adafruit.com"
-#define AIO_SERVERPORT  8883
-#define AIO_USERNAME    "AIO_USERNAME"
-#define AIO_KEY         "AIO_KEY"
-#define AIO_PM25        "PM25FEED"
-#define AIO_PM10        "PM10FEED"
+# define AIO_SERVER      "io.adafruit.com"
+# define AIO_SERVERPORT  8883
+# define AIO_USERNAME    "AIO_USERNAME"
+# define AIO_KEY         "AIO_KEY"
+# define AIO_PM25        "PM25FEED"
+# define AIO_PM10        "PM10FEED"
+#endif // ADAFRUIT_MQTT_SUPPORT
 
 #ifdef INFLUXDB_SUPPORT
 # define INFLUXDB_HOST     ""
@@ -83,10 +87,12 @@ ADC_MODE(ADC_VCC);
 // Create a secure client for sending data using HTTPs
 WiFiClientSecure client;
 
+#ifdef ADAFRUIT_MQTT_SUPPORT
 // create the objects for Adafruit IO
 Adafruit_MQTT_Client mqtt(&client, AIO_SERVER, AIO_SERVERPORT, AIO_USERNAME, AIO_KEY);
 Adafruit_MQTT_Publish pm25_feed = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME AIO_PM25);
 Adafruit_MQTT_Publish pm10_feed = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME AIO_PM10);
+#endif // ADAFRUIT_MQTT_SUPPORT
 
 // Struct for storing sensor data
 struct hackAirData data;
@@ -262,11 +268,11 @@ void loop() {
   if (DEBUG != "1") {
     // send data to network
 
-    if (ADAFRUIT_IO_ENABLE == "1") {
-      MQTT_connect();
-      pm25_feed.publish(data.pm25);
-      pm10_feed.publish(data.pm10);
-    }
+#ifdef ADAFRUIT_MQTT_SUPPORT
+    MQTT_connect();
+    pm25_feed.publish(data.pm25);
+    pm10_feed.publish(data.pm10);
+#endif // ADAFRUIT_MQTT_SUPPORT
 
     // Send the data to the hackAIR server
     Serial.println("Sending data to hackAIR platform...");
@@ -384,6 +390,7 @@ void loop() {
 
 // define functions
 
+#ifdef ADAFRUIT_MQTT_SUPPORT
 void MQTT_connect() {
   int8_t ret;
 
@@ -410,3 +417,4 @@ void MQTT_connect() {
 
   Serial.println("MQTT Connected!");
 }
+#endif // ADAFRUIT_MQTT_SUPPORT

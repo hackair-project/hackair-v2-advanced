@@ -12,44 +12,50 @@
  * in the Public Domain.
  */
 
+#undef DEBUG_MODE            // Change "#undef" to "#define" to enable debug mode (stops sending data to the hackAIR platform)
+#undef ADAFRUIT_MQTT_SUPPORT // Change "#undef" to "#define" to enable MQTT support
+#undef INFLUXDB_SUPPORT      // Change "#undef" to "#define" to enable InfluxDB support
+
 #include <Arduino.h>
-#include <DHT.h>                  // Adafruit's DHT sensor library https://github.com/adafruit/DHT-sensor-library
-#include <DNSServer.h>            // Local DNS Server used for redirecting all requests to the configuration portal
-#include <ESP8266WebServer.h>     // Local WebServer used to serve the configuration portal
-#include <ESP8266WiFi.h>          // ESP8266 Core WiFi Library (you most likely already have this in your sketch)
-#include <ESP8266mDNS.h>          // ESP8266 MDNS for .local name registration
-#include <FS.h>                   // Arduino filesystem layer
-#include <WiFiClientSecure.h>     // Variant of WiFiClient with TLS support (from ESP82266 core wifi)
-#include <WiFiManager.h>          // https://github.com/tzapu/WiFiManager
-#include <hackair.h>              // https://github.com/hackair-project/hackAir-Arduino
-#include "Adafruit_MQTT.h"        // Adafruit.io MQTT library
-#include "Adafruit_MQTT_Client.h" // Adafruit.io MQTT library
-#include <ArduinoJson.h>          // https://github.com/bblanchon/ArduinoJson
-#include <InfluxDb.h>             // InfluxDB support
+#include <DHT.h>                   // Adafruit's DHT sensor library https://github.com/adafruit/DHT-sensor-library
+#include <DNSServer.h>             // Local DNS Server used for redirecting all requests to the configuration portal
+#include <ESP8266WebServer.h>      // Local WebServer used to serve the configuration portal
+#include <ESP8266WiFi.h>           // ESP8266 Core WiFi Library (you most likely already have this in your sketch)
+#include <ESP8266mDNS.h>           // ESP8266 MDNS for .local name registration
+#include <FS.h>                    // Arduino filesystem layer
+#include <WiFiClientSecure.h>      // Variant of WiFiClient with TLS support (from ESP82266 core wifi)
+#include <WiFiManager.h>           // https://github.com/tzapu/WiFiManager
+#include <hackair.h>               // https://github.com/hackair-project/hackAir-Arduino
+#ifdef ADAFRUIT_MQTT_SUPPORT
+# include "Adafruit_MQTT.h"        // Adafruit.io MQTT library
+# include "Adafruit_MQTT_Client.h" // Adafruit.io MQTT library
+#endif // ADAFRUIT_MQTT_SUPPORT
+#include <ArduinoJson.h>           // https://github.com/bblanchon/ArduinoJson
+#ifdef INFLUXDB_SUPPORT
+# include <InfluxDb.h>             // InfluxDB support
+#endif // INFLUXDB_SUPPORT
 
 // Configuration
 
-#define HOSTNAME "hackair" // hostname to use for MDNS under the .local extension ( hackair.local )
-#define DEBUG "0"               // set this to 1 to stop sending data to the hackAIR platform
-#define ADAFRUIT_IO_ENABLE "0"  // set this to 1 to enable Adafruit.io sending
-#define INFLUXDB_ENABLE "0" // set this to 1 to enable InfluxDB support 
+#define HOSTNAME "hackair"      // hostname to use for MDNS under the .local extension ( hackair.local )
 
+#ifdef ADAFRUIT_MQTT_SUPPORT
 // Adafruit MQTT
+# define AIO_SERVER      "io.adafruit.com"
+# define AIO_SERVERPORT  8883
+# define AIO_USERNAME    "AIO_USERNAME"
+# define AIO_KEY         "AIO_KEY"
+# define AIO_PM25        "PM25FEED"
+# define AIO_PM10        "PM10FEED"
+#endif // ADAFRUIT_MQTT_SUPPORT
 
-#define AIO_SERVER      "io.adafruit.com"
-#define AIO_SERVERPORT  8883
-#define AIO_USERNAME    "AIO_USERNAME"
-#define AIO_KEY         "AIO_KEY"
-#define AIO_PM25        "PM25FEED"
-#define AIO_PM10        "PM10FEED"
-
-// InfluxDB support
-
-#define INFLUXDB_HOST ""
-#define INFLUXDB_PORT "8086"
-#define INFLUXDB_DATABASE "aq"
-#define INFLUXDB_USER ""
-#define INFLUXDB_PASS ""
+#ifdef INFLUXDB_SUPPORT
+# define INFLUXDB_HOST     ""
+# define INFLUXDB_PORT     "8086"
+# define INFLUXDB_DATABASE "aq"
+# define INFLUXDB_USER     ""
+# define INFLUXDB_PASS     ""
+#endif // INFLUXDB_SUPPORT
 
 // No more configuration below this line
 
@@ -57,11 +63,11 @@ char hackair_api_token[44]; // hackAIR API token to be collected via WiFiManager
 char sensebox_id[40]; // openSenseMap senseBox ID
 char osem_token[80]; // openSenseMap senseBox access token
 
-//flag for saving data
+// flag for saving data
 bool shouldSaveConfig = false;
 
-//callback notifying us of the need to save config
-void saveConfigCallback () {
+// callback notifying us of the need to save config
+void saveConfigCallback() {
   Serial.println("Should save config");
   shouldSaveConfig = true;
 }
@@ -81,27 +87,134 @@ ADC_MODE(ADC_VCC);
 // Create a secure client for sending data using HTTPs
 WiFiClientSecure client;
 
+#ifdef ADAFRUIT_MQTT_SUPPORT
 // create the objects for Adafruit IO
 Adafruit_MQTT_Client mqtt(&client, AIO_SERVER, AIO_SERVERPORT, AIO_USERNAME, AIO_KEY);
 Adafruit_MQTT_Publish pm25_feed = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME AIO_PM25);
 Adafruit_MQTT_Publish pm10_feed = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME AIO_PM10);
+#endif // ADAFRUIT_MQTT_SUPPORT
 
 // Struct for storing sensor data
 struct hackAirData data;
 unsigned long previous_millis = 0;
 
+// LetsEncrypt CA certificate
+// 1) Download certificate (currently https://letsencrypt.org/certs/lets-encrypt-x3-cross-signed.pem.txt )
+//    # wget https://letsencrypt.org/certs/lets-encrypt-x3-cross-signed.pem.txt
+// 2) Convert from Base64-encoded PEM (via file caCert, to get good C variable name)
+//    # openssl x509 -outform der -in "Let's Encrypt Authority X3.der" -out caCert && xxd -i caCert
+// 3) Paste below...
+
+unsigned char caCert[] = {
+    0x30, 0x82, 0x04, 0x92, 0x30, 0x82, 0x03, 0x7a, 0xa0, 0x03, 0x02, 0x01,
+    0x02, 0x02, 0x10, 0x0a, 0x01, 0x41, 0x42, 0x00, 0x00, 0x01, 0x53, 0x85,
+    0x73, 0x6a, 0x0b, 0x85, 0xec, 0xa7, 0x08, 0x30, 0x0d, 0x06, 0x09, 0x2a,
+    0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0b, 0x05, 0x00, 0x30, 0x3f,
+    0x31, 0x24, 0x30, 0x22, 0x06, 0x03, 0x55, 0x04, 0x0a, 0x13, 0x1b, 0x44,
+    0x69, 0x67, 0x69, 0x74, 0x61, 0x6c, 0x20, 0x53, 0x69, 0x67, 0x6e, 0x61,
+    0x74, 0x75, 0x72, 0x65, 0x20, 0x54, 0x72, 0x75, 0x73, 0x74, 0x20, 0x43,
+    0x6f, 0x2e, 0x31, 0x17, 0x30, 0x15, 0x06, 0x03, 0x55, 0x04, 0x03, 0x13,
+    0x0e, 0x44, 0x53, 0x54, 0x20, 0x52, 0x6f, 0x6f, 0x74, 0x20, 0x43, 0x41,
+    0x20, 0x58, 0x33, 0x30, 0x1e, 0x17, 0x0d, 0x31, 0x36, 0x30, 0x33, 0x31,
+    0x37, 0x31, 0x36, 0x34, 0x30, 0x34, 0x36, 0x5a, 0x17, 0x0d, 0x32, 0x31,
+    0x30, 0x33, 0x31, 0x37, 0x31, 0x36, 0x34, 0x30, 0x34, 0x36, 0x5a, 0x30,
+    0x4a, 0x31, 0x0b, 0x30, 0x09, 0x06, 0x03, 0x55, 0x04, 0x06, 0x13, 0x02,
+    0x55, 0x53, 0x31, 0x16, 0x30, 0x14, 0x06, 0x03, 0x55, 0x04, 0x0a, 0x13,
+    0x0d, 0x4c, 0x65, 0x74, 0x27, 0x73, 0x20, 0x45, 0x6e, 0x63, 0x72, 0x79,
+    0x70, 0x74, 0x31, 0x23, 0x30, 0x21, 0x06, 0x03, 0x55, 0x04, 0x03, 0x13,
+    0x1a, 0x4c, 0x65, 0x74, 0x27, 0x73, 0x20, 0x45, 0x6e, 0x63, 0x72, 0x79,
+    0x70, 0x74, 0x20, 0x41, 0x75, 0x74, 0x68, 0x6f, 0x72, 0x69, 0x74, 0x79,
+    0x20, 0x58, 0x33, 0x30, 0x82, 0x01, 0x22, 0x30, 0x0d, 0x06, 0x09, 0x2a,
+    0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01, 0x05, 0x00, 0x03, 0x82,
+    0x01, 0x0f, 0x00, 0x30, 0x82, 0x01, 0x0a, 0x02, 0x82, 0x01, 0x01, 0x00,
+    0x9c, 0xd3, 0x0c, 0xf0, 0x5a, 0xe5, 0x2e, 0x47, 0xb7, 0x72, 0x5d, 0x37,
+    0x83, 0xb3, 0x68, 0x63, 0x30, 0xea, 0xd7, 0x35, 0x26, 0x19, 0x25, 0xe1,
+    0xbd, 0xbe, 0x35, 0xf1, 0x70, 0x92, 0x2f, 0xb7, 0xb8, 0x4b, 0x41, 0x05,
+    0xab, 0xa9, 0x9e, 0x35, 0x08, 0x58, 0xec, 0xb1, 0x2a, 0xc4, 0x68, 0x87,
+    0x0b, 0xa3, 0xe3, 0x75, 0xe4, 0xe6, 0xf3, 0xa7, 0x62, 0x71, 0xba, 0x79,
+    0x81, 0x60, 0x1f, 0xd7, 0x91, 0x9a, 0x9f, 0xf3, 0xd0, 0x78, 0x67, 0x71,
+    0xc8, 0x69, 0x0e, 0x95, 0x91, 0xcf, 0xfe, 0xe6, 0x99, 0xe9, 0x60, 0x3c,
+    0x48, 0xcc, 0x7e, 0xca, 0x4d, 0x77, 0x12, 0x24, 0x9d, 0x47, 0x1b, 0x5a,
+    0xeb, 0xb9, 0xec, 0x1e, 0x37, 0x00, 0x1c, 0x9c, 0xac, 0x7b, 0xa7, 0x05,
+    0xea, 0xce, 0x4a, 0xeb, 0xbd, 0x41, 0xe5, 0x36, 0x98, 0xb9, 0xcb, 0xfd,
+    0x6d, 0x3c, 0x96, 0x68, 0xdf, 0x23, 0x2a, 0x42, 0x90, 0x0c, 0x86, 0x74,
+    0x67, 0xc8, 0x7f, 0xa5, 0x9a, 0xb8, 0x52, 0x61, 0x14, 0x13, 0x3f, 0x65,
+    0xe9, 0x82, 0x87, 0xcb, 0xdb, 0xfa, 0x0e, 0x56, 0xf6, 0x86, 0x89, 0xf3,
+    0x85, 0x3f, 0x97, 0x86, 0xaf, 0xb0, 0xdc, 0x1a, 0xef, 0x6b, 0x0d, 0x95,
+    0x16, 0x7d, 0xc4, 0x2b, 0xa0, 0x65, 0xb2, 0x99, 0x04, 0x36, 0x75, 0x80,
+    0x6b, 0xac, 0x4a, 0xf3, 0x1b, 0x90, 0x49, 0x78, 0x2f, 0xa2, 0x96, 0x4f,
+    0x2a, 0x20, 0x25, 0x29, 0x04, 0xc6, 0x74, 0xc0, 0xd0, 0x31, 0xcd, 0x8f,
+    0x31, 0x38, 0x95, 0x16, 0xba, 0xa8, 0x33, 0xb8, 0x43, 0xf1, 0xb1, 0x1f,
+    0xc3, 0x30, 0x7f, 0xa2, 0x79, 0x31, 0x13, 0x3d, 0x2d, 0x36, 0xf8, 0xe3,
+    0xfc, 0xf2, 0x33, 0x6a, 0xb9, 0x39, 0x31, 0xc5, 0xaf, 0xc4, 0x8d, 0x0d,
+    0x1d, 0x64, 0x16, 0x33, 0xaa, 0xfa, 0x84, 0x29, 0xb6, 0xd4, 0x0b, 0xc0,
+    0xd8, 0x7d, 0xc3, 0x93, 0x02, 0x03, 0x01, 0x00, 0x01, 0xa3, 0x82, 0x01,
+    0x7d, 0x30, 0x82, 0x01, 0x79, 0x30, 0x12, 0x06, 0x03, 0x55, 0x1d, 0x13,
+    0x01, 0x01, 0xff, 0x04, 0x08, 0x30, 0x06, 0x01, 0x01, 0xff, 0x02, 0x01,
+    0x00, 0x30, 0x0e, 0x06, 0x03, 0x55, 0x1d, 0x0f, 0x01, 0x01, 0xff, 0x04,
+    0x04, 0x03, 0x02, 0x01, 0x86, 0x30, 0x7f, 0x06, 0x08, 0x2b, 0x06, 0x01,
+    0x05, 0x05, 0x07, 0x01, 0x01, 0x04, 0x73, 0x30, 0x71, 0x30, 0x32, 0x06,
+    0x08, 0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x30, 0x01, 0x86, 0x26, 0x68,
+    0x74, 0x74, 0x70, 0x3a, 0x2f, 0x2f, 0x69, 0x73, 0x72, 0x67, 0x2e, 0x74,
+    0x72, 0x75, 0x73, 0x74, 0x69, 0x64, 0x2e, 0x6f, 0x63, 0x73, 0x70, 0x2e,
+    0x69, 0x64, 0x65, 0x6e, 0x74, 0x72, 0x75, 0x73, 0x74, 0x2e, 0x63, 0x6f,
+    0x6d, 0x30, 0x3b, 0x06, 0x08, 0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x30,
+    0x02, 0x86, 0x2f, 0x68, 0x74, 0x74, 0x70, 0x3a, 0x2f, 0x2f, 0x61, 0x70,
+    0x70, 0x73, 0x2e, 0x69, 0x64, 0x65, 0x6e, 0x74, 0x72, 0x75, 0x73, 0x74,
+    0x2e, 0x63, 0x6f, 0x6d, 0x2f, 0x72, 0x6f, 0x6f, 0x74, 0x73, 0x2f, 0x64,
+    0x73, 0x74, 0x72, 0x6f, 0x6f, 0x74, 0x63, 0x61, 0x78, 0x33, 0x2e, 0x70,
+    0x37, 0x63, 0x30, 0x1f, 0x06, 0x03, 0x55, 0x1d, 0x23, 0x04, 0x18, 0x30,
+    0x16, 0x80, 0x14, 0xc4, 0xa7, 0xb1, 0xa4, 0x7b, 0x2c, 0x71, 0xfa, 0xdb,
+    0xe1, 0x4b, 0x90, 0x75, 0xff, 0xc4, 0x15, 0x60, 0x85, 0x89, 0x10, 0x30,
+    0x54, 0x06, 0x03, 0x55, 0x1d, 0x20, 0x04, 0x4d, 0x30, 0x4b, 0x30, 0x08,
+    0x06, 0x06, 0x67, 0x81, 0x0c, 0x01, 0x02, 0x01, 0x30, 0x3f, 0x06, 0x0b,
+    0x2b, 0x06, 0x01, 0x04, 0x01, 0x82, 0xdf, 0x13, 0x01, 0x01, 0x01, 0x30,
+    0x30, 0x30, 0x2e, 0x06, 0x08, 0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x02,
+    0x01, 0x16, 0x22, 0x68, 0x74, 0x74, 0x70, 0x3a, 0x2f, 0x2f, 0x63, 0x70,
+    0x73, 0x2e, 0x72, 0x6f, 0x6f, 0x74, 0x2d, 0x78, 0x31, 0x2e, 0x6c, 0x65,
+    0x74, 0x73, 0x65, 0x6e, 0x63, 0x72, 0x79, 0x70, 0x74, 0x2e, 0x6f, 0x72,
+    0x67, 0x30, 0x3c, 0x06, 0x03, 0x55, 0x1d, 0x1f, 0x04, 0x35, 0x30, 0x33,
+    0x30, 0x31, 0xa0, 0x2f, 0xa0, 0x2d, 0x86, 0x2b, 0x68, 0x74, 0x74, 0x70,
+    0x3a, 0x2f, 0x2f, 0x63, 0x72, 0x6c, 0x2e, 0x69, 0x64, 0x65, 0x6e, 0x74,
+    0x72, 0x75, 0x73, 0x74, 0x2e, 0x63, 0x6f, 0x6d, 0x2f, 0x44, 0x53, 0x54,
+    0x52, 0x4f, 0x4f, 0x54, 0x43, 0x41, 0x58, 0x33, 0x43, 0x52, 0x4c, 0x2e,
+    0x63, 0x72, 0x6c, 0x30, 0x1d, 0x06, 0x03, 0x55, 0x1d, 0x0e, 0x04, 0x16,
+    0x04, 0x14, 0xa8, 0x4a, 0x6a, 0x63, 0x04, 0x7d, 0xdd, 0xba, 0xe6, 0xd1,
+    0x39, 0xb7, 0xa6, 0x45, 0x65, 0xef, 0xf3, 0xa8, 0xec, 0xa1, 0x30, 0x0d,
+    0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0b, 0x05,
+    0x00, 0x03, 0x82, 0x01, 0x01, 0x00, 0xdd, 0x33, 0xd7, 0x11, 0xf3, 0x63,
+    0x58, 0x38, 0xdd, 0x18, 0x15, 0xfb, 0x09, 0x55, 0xbe, 0x76, 0x56, 0xb9,
+    0x70, 0x48, 0xa5, 0x69, 0x47, 0x27, 0x7b, 0xc2, 0x24, 0x08, 0x92, 0xf1,
+    0x5a, 0x1f, 0x4a, 0x12, 0x29, 0x37, 0x24, 0x74, 0x51, 0x1c, 0x62, 0x68,
+    0xb8, 0xcd, 0x95, 0x70, 0x67, 0xe5, 0xf7, 0xa4, 0xbc, 0x4e, 0x28, 0x51,
+    0xcd, 0x9b, 0xe8, 0xae, 0x87, 0x9d, 0xea, 0xd8, 0xba, 0x5a, 0xa1, 0x01,
+    0x9a, 0xdc, 0xf0, 0xdd, 0x6a, 0x1d, 0x6a, 0xd8, 0x3e, 0x57, 0x23, 0x9e,
+    0xa6, 0x1e, 0x04, 0x62, 0x9a, 0xff, 0xd7, 0x05, 0xca, 0xb7, 0x1f, 0x3f,
+    0xc0, 0x0a, 0x48, 0xbc, 0x94, 0xb0, 0xb6, 0x65, 0x62, 0xe0, 0xc1, 0x54,
+    0xe5, 0xa3, 0x2a, 0xad, 0x20, 0xc4, 0xe9, 0xe6, 0xbb, 0xdc, 0xc8, 0xf6,
+    0xb5, 0xc3, 0x32, 0xa3, 0x98, 0xcc, 0x77, 0xa8, 0xe6, 0x79, 0x65, 0x07,
+    0x2b, 0xcb, 0x28, 0xfe, 0x3a, 0x16, 0x52, 0x81, 0xce, 0x52, 0x0c, 0x2e,
+    0x5f, 0x83, 0xe8, 0xd5, 0x06, 0x33, 0xfb, 0x77, 0x6c, 0xce, 0x40, 0xea,
+    0x32, 0x9e, 0x1f, 0x92, 0x5c, 0x41, 0xc1, 0x74, 0x6c, 0x5b, 0x5d, 0x0a,
+    0x5f, 0x33, 0xcc, 0x4d, 0x9f, 0xac, 0x38, 0xf0, 0x2f, 0x7b, 0x2c, 0x62,
+    0x9d, 0xd9, 0xa3, 0x91, 0x6f, 0x25, 0x1b, 0x2f, 0x90, 0xb1, 0x19, 0x46,
+    0x3d, 0xf6, 0x7e, 0x1b, 0xa6, 0x7a, 0x87, 0xb9, 0xa3, 0x7a, 0x6d, 0x18,
+    0xfa, 0x25, 0xa5, 0x91, 0x87, 0x15, 0xe0, 0xf2, 0x16, 0x2f, 0x58, 0xb0,
+    0x06, 0x2f, 0x2c, 0x68, 0x26, 0xc6, 0x4b, 0x98, 0xcd, 0xda, 0x9f, 0x0c,
+    0xf9, 0x7f, 0x90, 0xed, 0x43, 0x4a, 0x12, 0x44, 0x4e, 0x6f, 0x73, 0x7a,
+    0x28, 0xea, 0xa4, 0xaa, 0x6e, 0x7b, 0x4c, 0x7d, 0x87, 0xdd, 0xe0, 0xc9,
+    0x02, 0x44, 0xa7, 0x87, 0xaf, 0xc3, 0x34, 0x5b, 0xb4, 0x43};
+unsigned int caCert_len = 1174;
+
 void setup() {
   // Open serial communications
-  
   Serial.begin(9600);
   Serial.println("\nHackAIR v2 sensor");
 
-  if ( DEBUG == "1" ) {
+#ifdef DEBUG_MODE
+  Serial.println("Debug mode on, not sending data to hackAIR");
+#endif // DEBUG_MODE
 
-    Serial.println("Debug mode on, not sending data to hackAIR");
-    
-  }
-    
   Serial.println("Ready");
   Serial.print("IP address: ");
   Serial.println(WiFi.localIP());
@@ -109,11 +222,10 @@ void setup() {
   pinMode(BUILTIN_LED, OUTPUT);
 
   // read config from filesystem
-
-    if (SPIFFS.begin()) {
+  if (SPIFFS.begin()) {
     Serial.println("mounted file system");
     if (SPIFFS.exists("/config.json")) {
-      //file exists, reading and loading
+      // file exists, reading and loading
       Serial.println("reading config file");
       File configFile = SPIFFS.open("/config.json", "r");
       if (configFile) {
@@ -123,31 +235,32 @@ void setup() {
         std::unique_ptr<char[]> buf(new char[size]);
 
         configFile.readBytes(buf.get(), size);
-        DynamicJsonBuffer jsonBuffer;
-        JsonObject& json = jsonBuffer.parseObject(buf.get());
-        json.prettyPrintTo(Serial);
-        if (json.success()) {
+        DynamicJsonDocument jsonDoc(1024);
+        auto error = deserializeJson(jsonDoc, buf.get());
+        serializeJson(jsonDoc, Serial);
+        if (error.code() == DeserializationError::Ok) {
           Serial.println("\nparsed json");
 
-          strcpy(hackair_api_token, json["hackair_api_token"]);  
+          strcpy(hackair_api_token, jsonDoc["hackair_api_token"]);
 
-          const char* my_osem_token = json["osem_token"];
+          const char *my_osem_token = jsonDoc["osem_token"];
           strcpy(osem_token, my_osem_token);
           Serial.println(osem_token);
 
-          const char* my_sensebox_id = json["sensebox_id"];
+          const char *my_sensebox_id = jsonDoc["sensebox_id"];
           strcpy(sensebox_id, my_sensebox_id);
           Serial.println(sensebox_id);
-                 
         } else {
           Serial.println("failed to load json config");
         }
       }
+    } else {
+      Serial.println("/config.json not found");
     }
   } else {
-    Serial.println("failed to mount FS");
+    Serial.println("failed to mount FS. Make sure Tools|Flash Size is not set to No SPIFFS");
   }
-  
+
   // Initialize the PM sensor
   sensor.begin();
   sensor.enablePowerControl();
@@ -181,31 +294,30 @@ void setup() {
     delay(10000);
   }
 
-  //read updated parameters
+  // read updated parameters
   strcpy(hackair_api_token, custom_hackair_api_token.getValue());
   strcpy(sensebox_id, custom_sensebox_id.getValue());
   strcpy(osem_token, custom_osem_token.getValue());
 
-  //save the custom parameters to FS
+  // save the custom parameters to FS
   if (shouldSaveConfig) {
     Serial.println("saving config");
-    DynamicJsonBuffer jsonBuffer;
-    JsonObject& json = jsonBuffer.createObject();
-    json["hackair_api_token"] = hackair_api_token;
-    json["sensebox_id"] = sensebox_id;
-    json["osem_token"] = osem_token;
- 
+    DynamicJsonDocument jsonDoc(1024);
+    jsonDoc["hackair_api_token"] = hackair_api_token;
+    jsonDoc["sensebox_id"] = sensebox_id;
+    jsonDoc["osem_token"] = osem_token;
+
     File configFile = SPIFFS.open("/config.json", "w");
     if (!configFile) {
       Serial.println("failed to open config file for writing");
     }
 
-    json.printTo(Serial);
-    json.printTo(configFile);
+    serializeJson(jsonDoc, Serial);
+    serializeJson(jsonDoc, configFile);
     configFile.close();
-    //end save
+    // end save
   }
-  
+
   // check if we have connected to the WiFi
   Serial.println("Network connected");
   Serial.println("Local IP address: ");
@@ -213,14 +325,29 @@ void setup() {
   Serial.println("Default Gateway: ");
   Serial.print(WiFi.gatewayIP());
   MDNS.begin(HOSTNAME);
-  
+
+  // Set time via NTP, as required for x.509 validation
+  Serial.println("Setting time using SNTP");
+  configTime(0, 0, "pool.ntp.org", "time.nist.gov"); // UTC
+  time_t now = time(nullptr);
+  while (now < 8 * 3600 * 2) {
+    yield();
+    delay(500);
+    Serial.print(".");
+    now = time(nullptr);
+  }
+  Serial.print("\nCurrent time UTC: ");
+  Serial.println(ctime(&now));
+
+  if (!client.setCACert(caCert, caCert_len)) {
+    Serial.println("Failed to set root CA certificate");
+  }
 }
 
 void loop() {
-
   int chip_id = ESP.getChipId();
   float vdd = ESP.getVcc() / 500.0;
-  
+
   while (WiFi.status() != WL_CONNECTED) {
     WiFi.hostname("hackair");
     delay(500);
@@ -232,97 +359,84 @@ void loop() {
 
   float env_temp = dht.readTemperature();
   float env_hum = dht.readHumidity();
-  
+
   int error = 0;
   Serial.println("Measuring...");
 
-// Measure data
+  // Measure data
   sensor.clearData(data);
   sensor.readAverageData(data, 60); // 60 averages
 
   if (data.error != H_ERROR_SENSOR) {
-  // Compensate for humidity
-  float humidity = dht.readHumidity();
-  if (isnan(humidity)) {
-    data.error |= H_ERROR_HUMIDITY;
-  } else {
-    sensor.humidityCompensation(data, humidity);
-  }
+    // Compensate for humidity
+    float humidity = dht.readHumidity();
+    if (isnan(humidity)) {
+      data.error |= H_ERROR_HUMIDITY;
+    } else {
+      sensor.humidityCompensation(data, humidity);
+    }
   }
 
   // construct the JSON to send to the hackAIR platform
 
   String dataJson = "{\"reading\":{\"PM2.5_AirPollutantValue\":\"";
-    dataJson += data.pm25;
-    dataJson += "\",\"PM10_AirPollutantValue\":\"";
-    dataJson += data.pm10;
-    dataJson += "\"},\"battery\":\"";
-    dataJson += vdd;
-    dataJson += "\",\"tamper\":\"";
-    dataJson += "0";
-    dataJson += "\",\"error\":\"";
-    dataJson += data.error;
-    dataJson += "\"}";
+  dataJson += data.pm25;
+  dataJson += "\",\"PM10_AirPollutantValue\":\"";
+  dataJson += data.pm10;
+  dataJson += "\"},\"battery\":\"";
+  dataJson += vdd;
+  dataJson += "\",\"tamper\":\"";
+  dataJson += "0";
+  dataJson += "\",\"error\":\"";
+  dataJson += data.error;
+  dataJson += "\"}";
 
- 
+#ifndef DEBUG_MODE
+  // send data to network
 
-  if ( DEBUG != "1" ) {
+#ifdef ADAFRUIT_MQTT_SUPPORT
+  MQTT_connect();
+  pm25_feed.publish(data.pm25);
+  pm10_feed.publish(data.pm10);
+#endif // ADAFRUIT_MQTT_SUPPORT
 
-    // send data to network
+  // Send the data to the hackAIR server
+  Serial.println("Sending data to hackAIR platform...");
+  if (client.connect("api.hackair.eu", 443)) {
+    Serial.println("Connected to api.hackair.eu");
+    client.print("POST /sensors/arduino/measurements HTTP/1.1\r\n");
+    client.print("Host: api.hackair.eu\r\n");
+    client.print("Connection: close\r\n");
+    client.print("Authorization: ");
+    client.println(hackair_api_token);
+    client.print("Accept: application/vnd.hackair.v1+json\r\n");
+    client.print("Cache-Control: no-cache\r\n");
+    client.print("Content-Type: application/json\r\n");
+    client.print("Content-Length: ");
+    client.println(dataJson.length() + 2);
+    client.println("");
+    client.println(dataJson);
+    Serial.println(dataJson);
+    delay(500);
 
-    if ( ADAFRUIT_IO_ENABLE == "1" ) {
-
-        MQTT_connect();
-        pm25_feed.publish(data.pm25);
-        pm10_feed.publish(data.pm10);
-        
-    }
-
-    
-    
-    // Send the data to the hackAIR server
-
-    Serial.println("Sending data to hackAIR platform...");
-    
-    if (client.connect("api.hackair.eu", 443)) {
-      Serial.println("Connected to api.hackair.eu");
-      client.print("POST /sensors/arduino/measurements HTTP/1.1\r\n");
-      client.print("Host: api.hackair.eu\r\n");
-      client.print("Connection: close\r\n");
-      client.print("Authorization: ");
-      client.println(hackair_api_token);
-      client.print("Accept: application/vnd.hackair.v1+json\r\n");
-      client.print("Cache-Control: no-cache\r\n");
-      client.print("Content-Type: application/json\r\n");
-      client.print("Content-Length: ");
-      client.println(dataJson.length() + 2);
-      client.println("");
-      client.println(dataJson);
-      Serial.println(dataJson);
-      delay(500);
-      
-      while (client.available()) {
-        
-        char c = client.read();
-      
-      Serial.print(c);
+    while (client.available()) {
+      Serial.print((char)client.read());
     }
     client.stop();
   } else {
-    
     Serial.println("Unable to send data to hackAIR platform\n");
   }
   delay(1000);
 
   // Send data to openSenseMap
-  if ( sensebox_id != "" && osem_token != "") {
+  if (sensebox_id != "" && osem_token != "") {
     // Send the data to the openSenseMap server
     Serial.println("Sending data to openSenseMap platform...");
     Serial.println(sensebox_id);
     Serial.println("OSEM:\n");
     Serial.println(osem_token);
     Serial.println("\nEND\n");
-    
+
     if (client.connect("api.opensensemap.org", 443)) {
       Serial.println("Connected to api.opensensemap.org");
       client.print("POST /boxes/");
@@ -342,71 +456,58 @@ void loop() {
       delay(500);
 
       while (client.available()) {
-        char c = client.read();
-
-        Serial.print(c);
+        Serial.print((char)client.read());
       }
+    } else {
+      Serial.println("Unable to send data to openSenseMap platform\n");
     }
     client.stop();
     delay(1000);
-    } else {
-        
-      Serial.println("Unable to send data to openSenseMap platform\n");
-      
-    }
-   
-   
   } else {
+    Serial.println("Missing tokens. Not sending to openSenseMap platform\n");
+  }
+#else // DEBUG_MODE
+  // DEBUG is on, output values to serial but don't send to network
+  Serial.println("DEBUG");
+  Serial.print("hackair API token: ");
+  Serial.println(hackair_api_token); // write API token
+  Serial.print("Chip ID: ");
+  Serial.println(chip_id);
+  Serial.print("Temperature: ");
+  Serial.println(env_temp);
+  Serial.print("Humidity: ");
+  Serial.println(env_hum);
+  Serial.println(dataJson); // write sensor values to serial for debug
 
-    // DEBUG is on, output values to serial but don't send to network
+#ifdef INFLUXDB_SUPPORT
+  // connect to influxdb
+  Influxdb influx(INFLUXDB_HOST); // port defaults to 8086
+  influx.setDbAuth(INFLUXDB_DATABASE, INFLUXDB_USER, INFLUXDB_PASS); // with authentication
 
-    Serial.println("DEBUG");
-    Serial.println(DEBUG);
-    Serial.print("hackair API token: ");
-    Serial.println(hackair_api_token); // write API token
-    Serial.print("Chip ID: ");
-    Serial.println(chip_id);
-    Serial.print("Temperature: ");
-    Serial.println(env_temp);
-    Serial.print("Humidity: ");
-    Serial.println(env_hum);
-    Serial.println(dataJson); // write sensor values to serial for debug
+  String influx_chip_id = String(chip_id);
 
-    if ( INFLUXDB_ENABLE == "1" ) {
+  // create a measurement object
+  InfluxData measurement("airquality");
+  measurement.addTag("device", influx_chip_id);
+  measurement.addTag("sensor", "sds11");
+  measurement.addValue("pm10", data.pm10);
+  measurement.addValue("pm25", data.pm25);
+  measurement.addValue("temperature", env_temp);
+  measurement.addValue("humidity", env_hum);
 
-      // connect to influxdb
+  // write it into db
+  influx.write(measurement);
 
-      Influxdb influx(INFLUXDB_HOST); // port defaults to 8086
-      influx.setDbAuth(INFLUXDB_DATABASE, INFLUXDB_USER, INFLUXDB_PASS); // with authentication
+  client.println("Writing to InfluxDB");
+#endif // INFLUXDB_SUPPORT
+#endif // DEBUG_MODE
 
-      String influx_chip_id = String(chip_id);
-      
-      // create a measurement object
-      InfluxData measurement ("airquality");
-      measurement.addTag("device", influx_chip_id);
-      measurement.addTag("sensor", "sds11");
-      measurement.addValue("pm10", data.pm10);
-      measurement.addValue("pm25", data.pm25);
-      measurement.addValue("temperature", env_temp);
-      measurement.addValue("humidity", env_hum);
-
-      // write it into db
-      influx.write(measurement);
-
-      client.println("Writing to InfluxDB");
-
-    }
-      
-    }
-    
   // Turn off sensor and go to sleep
   sensor.turnOff();
   unsigned long current_millis = millis();
-  while (current_millis <
-         (previous_millis + (minutes_time_interval * 60 * 1000))) {
+  while (current_millis < (previous_millis + (minutes_time_interval * 60 * 1000))) {
     delay(10000);
     current_millis = millis();
-    
   }
   previous_millis = current_millis;
   sensor.turnOn();
@@ -414,6 +515,7 @@ void loop() {
 
 // define functions
 
+#ifdef ADAFRUIT_MQTT_SUPPORT
 void MQTT_connect() {
   int8_t ret;
 
@@ -426,17 +528,18 @@ void MQTT_connect() {
 
   uint8_t retries = 3;
   while ((ret = mqtt.connect()) != 0) { // connect will return 0 for connected
-       Serial.println(mqtt.connectErrorString(ret));
-       Serial.println(ret);
-       Serial.println("Retrying MQTT connection in 5 seconds...");
-       mqtt.disconnect();
-       delay(5000);  // wait 5 seconds
-       retries--;
-       if (retries == 0) {
-         // basically die and wait for WDT to reset me
-         while (1);
-       }
+    Serial.println(mqtt.connectErrorString(ret));
+    Serial.println(ret);
+    Serial.println("Retrying MQTT connection in 5 seconds...");
+    mqtt.disconnect();
+    delay(5000); // wait 5 seconds
+    retries--;
+    if (retries == 0) {
+      // basically die and wait for WDT to reset me
+      while (true) ;
+    }
   }
 
   Serial.println("MQTT Connected!");
 }
+#endif // ADAFRUIT_MQTT_SUPPORT

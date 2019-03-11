@@ -17,20 +17,20 @@
 #undef INFLUXDB_SUPPORT      // Change "#undef" to "#define" to enable InfluxDB support
 
 #include <Arduino.h>
-#include <DHT.h>                  // Adafruit's DHT sensor library https://github.com/adafruit/DHT-sensor-library
-#include <DNSServer.h>            // Local DNS Server used for redirecting all requests to the configuration portal
-#include <ESP8266WebServer.h>     // Local WebServer used to serve the configuration portal
-#include <ESP8266WiFi.h>          // ESP8266 Core WiFi Library (you most likely already have this in your sketch)
-#include <ESP8266mDNS.h>          // ESP8266 MDNS for .local name registration
-#include <FS.h>                   // Arduino filesystem layer
-#include <WiFiClientSecure.h>     // Variant of WiFiClient with TLS support (from ESP82266 core wifi)
-#include <WiFiManager.h>          // https://github.com/tzapu/WiFiManager
-#include <hackair.h>              // https://github.com/hackair-project/hackAir-Arduino
+#include <DHT.h>                   // Adafruit's DHT sensor library https://github.com/adafruit/DHT-sensor-library
+#include <DNSServer.h>             // Local DNS Server used for redirecting all requests to the configuration portal
+#include <ESP8266WebServer.h>      // Local WebServer used to serve the configuration portal
+#include <ESP8266WiFi.h>           // ESP8266 Core WiFi Library (you most likely already have this in your sketch)
+#include <ESP8266mDNS.h>           // ESP8266 MDNS for .local name registration
+#include <FS.h>                    // Arduino filesystem layer
+#include <WiFiClientSecure.h>      // Variant of WiFiClient with TLS support (from ESP82266 core wifi)
+#include <WiFiManager.h>           // https://github.com/tzapu/WiFiManager
+#include <hackair.h>               // https://github.com/hackair-project/hackAir-Arduino
 #ifdef ADAFRUIT_MQTT_SUPPORT
 # include "Adafruit_MQTT.h"        // Adafruit.io MQTT library
 # include "Adafruit_MQTT_Client.h" // Adafruit.io MQTT library
 #endif // ADAFRUIT_MQTT_SUPPORT
-#include <ArduinoJson.h>          // https://github.com/bblanchon/ArduinoJson
+#include <ArduinoJson.h>           // https://github.com/bblanchon/ArduinoJson
 #ifdef INFLUXDB_SUPPORT
 # include <InfluxDb.h>             // InfluxDB support
 #endif // INFLUXDB_SUPPORT
@@ -127,28 +127,30 @@ void setup() {
         std::unique_ptr<char[]> buf(new char[size]);
 
         configFile.readBytes(buf.get(), size);
-        DynamicJsonBuffer jsonBuffer;
-        JsonObject &json = jsonBuffer.parseObject(buf.get());
-        json.prettyPrintTo(Serial);
-        if (json.success()) {
+        DynamicJsonDocument jsonDoc(1024);
+        auto error = deserializeJson(jsonDoc, buf.get());
+        serializeJson(jsonDoc, Serial);
+        if (error.code() == DeserializationError::Ok) {
           Serial.println("\nparsed json");
 
-          strcpy(hackair_api_token, json["hackair_api_token"]);
+          strcpy(hackair_api_token, jsonDoc["hackair_api_token"]);
 
-          const char *my_osem_token = json["osem_token"];
+          const char *my_osem_token = jsonDoc["osem_token"];
           strcpy(osem_token, my_osem_token);
           Serial.println(osem_token);
 
-          const char *my_sensebox_id = json["sensebox_id"];
+          const char *my_sensebox_id = jsonDoc["sensebox_id"];
           strcpy(sensebox_id, my_sensebox_id);
           Serial.println(sensebox_id);
         } else {
           Serial.println("failed to load json config");
         }
       }
+    } else {
+      Serial.println("/config.json not found");
     }
   } else {
-    Serial.println("failed to mount FS");
+    Serial.println("failed to mount FS. Make sure Tools|Flash Size is not set to No SPIFFS");
   }
 
   // Initialize the PM sensor
@@ -192,19 +194,18 @@ void setup() {
   // save the custom parameters to FS
   if (shouldSaveConfig) {
     Serial.println("saving config");
-    DynamicJsonBuffer jsonBuffer;
-    JsonObject &json = jsonBuffer.createObject();
-    json["hackair_api_token"] = hackair_api_token;
-    json["sensebox_id"] = sensebox_id;
-    json["osem_token"] = osem_token;
+    DynamicJsonDocument jsonDoc(1024);
+    jsonDoc["hackair_api_token"] = hackair_api_token;
+    jsonDoc["sensebox_id"] = sensebox_id;
+    jsonDoc["osem_token"] = osem_token;
 
     File configFile = SPIFFS.open("/config.json", "w");
     if (!configFile) {
       Serial.println("failed to open config file for writing");
     }
 
-    json.printTo(Serial);
-    json.printTo(configFile);
+    serializeJson(jsonDoc, Serial);
+    serializeJson(jsonDoc, configFile);
     configFile.close();
     // end save
   }

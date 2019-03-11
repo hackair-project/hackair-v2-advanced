@@ -12,6 +12,8 @@
  * in the Public Domain.
  */
 
+#undef INFLUXDB_SUPPORT // Change "#undef" to "#define" to enable InfluxDB support
+
 #include <Arduino.h>
 #include <DHT.h>                  // Adafruit's DHT sensor library https://github.com/adafruit/DHT-sensor-library
 #include <DNSServer.h>            // Local DNS Server used for redirecting all requests to the configuration portal
@@ -25,14 +27,15 @@
 #include "Adafruit_MQTT.h"        // Adafruit.io MQTT library
 #include "Adafruit_MQTT_Client.h" // Adafruit.io MQTT library
 #include <ArduinoJson.h>          // https://github.com/bblanchon/ArduinoJson
-#include <InfluxDb.h>             // InfluxDB support
+#ifdef INFLUXDB_SUPPORT
+# include <InfluxDb.h>             // InfluxDB support
+#endif // INFLUXDB_SUPPORT
 
 // Configuration
 
 #define HOSTNAME "hackair"      // hostname to use for MDNS under the .local extension ( hackair.local )
 #define DEBUG "0"               // set this to 1 to stop sending data to the hackAIR platform
 #define ADAFRUIT_IO_ENABLE "0"  // set this to 1 to enable Adafruit.io sending
-#define INFLUXDB_ENABLE "0"     // set this to 1 to enable InfluxDB support 
 
 // Adafruit MQTT
 #define AIO_SERVER      "io.adafruit.com"
@@ -42,12 +45,13 @@
 #define AIO_PM25        "PM25FEED"
 #define AIO_PM10        "PM10FEED"
 
-// InfluxDB support
-#define INFLUXDB_HOST ""
-#define INFLUXDB_PORT "8086"
-#define INFLUXDB_DATABASE "aq"
-#define INFLUXDB_USER ""
-#define INFLUXDB_PASS ""
+#ifdef INFLUXDB_SUPPORT
+# define INFLUXDB_HOST     ""
+# define INFLUXDB_PORT     "8086"
+# define INFLUXDB_DATABASE "aq"
+# define INFLUXDB_USER     ""
+# define INFLUXDB_PASS     ""
+#endif // INFLUXDB_SUPPORT
 
 // No more configuration below this line
 
@@ -344,27 +348,27 @@ void loop() {
     Serial.println(env_hum);
     Serial.println(dataJson); // write sensor values to serial for debug
 
-    if (INFLUXDB_ENABLE == "1") {
-      // connect to influxdb
-      Influxdb influx(INFLUXDB_HOST); // port defaults to 8086
-      influx.setDbAuth(INFLUXDB_DATABASE, INFLUXDB_USER, INFLUXDB_PASS); // with authentication
+#ifdef INFLUXDB_SUPPORT
+    // connect to influxdb
+    Influxdb influx(INFLUXDB_HOST); // port defaults to 8086
+    influx.setDbAuth(INFLUXDB_DATABASE, INFLUXDB_USER, INFLUXDB_PASS); // with authentication
 
-      String influx_chip_id = String(chip_id);
+    String influx_chip_id = String(chip_id);
 
-      // create a measurement object
-      InfluxData measurement("airquality");
-      measurement.addTag("device", influx_chip_id);
-      measurement.addTag("sensor", "sds11");
-      measurement.addValue("pm10", data.pm10);
-      measurement.addValue("pm25", data.pm25);
-      measurement.addValue("temperature", env_temp);
-      measurement.addValue("humidity", env_hum);
+    // create a measurement object
+    InfluxData measurement("airquality");
+    measurement.addTag("device", influx_chip_id);
+    measurement.addTag("sensor", "sds11");
+    measurement.addValue("pm10", data.pm10);
+    measurement.addValue("pm25", data.pm25);
+    measurement.addValue("temperature", env_temp);
+    measurement.addValue("humidity", env_hum);
 
-      // write it into db
-      influx.write(measurement);
+    // write it into db
+    influx.write(measurement);
 
-      client.println("Writing to InfluxDB");
-    }
+    client.println("Writing to InfluxDB");
+#endif // INFLUXDB_SUPPORT
   }
 
   // Turn off sensor and go to sleep

@@ -12,6 +12,7 @@
  * in the Public Domain.
  */
 
+#undef DEBUG_MODE            // Change "#undef" to "#define" to enable debug mode (stops sending data to the hackAIR platform)
 #undef ADAFRUIT_MQTT_SUPPORT // Change "#undef" to "#define" to enable MQTT support
 #undef INFLUXDB_SUPPORT      // Change "#undef" to "#define" to enable InfluxDB support
 
@@ -37,7 +38,6 @@
 // Configuration
 
 #define HOSTNAME "hackair"      // hostname to use for MDNS under the .local extension ( hackair.local )
-#define DEBUG "0"               // set this to 1 to stop sending data to the hackAIR platform
 
 #ifdef ADAFRUIT_MQTT_SUPPORT
 // Adafruit MQTT
@@ -103,9 +103,9 @@ void setup() {
   Serial.begin(9600);
   Serial.println("\nHackAIR v2 sensor");
 
-  if (DEBUG == "1") {
-    Serial.println("Debug mode on, not sending data to hackAIR");
-  }
+#ifdef DEBUG_MODE
+  Serial.println("Debug mode on, not sending data to hackAIR");
+#endif // DEBUG_MODE
 
   Serial.println("Ready");
   Serial.print("IP address: ");
@@ -265,25 +265,62 @@ void loop() {
   dataJson += data.error;
   dataJson += "\"}";
 
-  if (DEBUG != "1") {
-    // send data to network
+#ifndef DEBUG_MODE
+  // send data to network
 
 #ifdef ADAFRUIT_MQTT_SUPPORT
-    MQTT_connect();
-    pm25_feed.publish(data.pm25);
-    pm10_feed.publish(data.pm10);
+  MQTT_connect();
+  pm25_feed.publish(data.pm25);
+  pm10_feed.publish(data.pm10);
 #endif // ADAFRUIT_MQTT_SUPPORT
 
-    // Send the data to the hackAIR server
-    Serial.println("Sending data to hackAIR platform...");
-    if (client.connect("api.hackair.eu", 443)) {
-      Serial.println("Connected to api.hackair.eu");
-      client.print("POST /sensors/arduino/measurements HTTP/1.1\r\n");
-      client.print("Host: api.hackair.eu\r\n");
+  // Send the data to the hackAIR server
+  Serial.println("Sending data to hackAIR platform...");
+  if (client.connect("api.hackair.eu", 443)) {
+    Serial.println("Connected to api.hackair.eu");
+    client.print("POST /sensors/arduino/measurements HTTP/1.1\r\n");
+    client.print("Host: api.hackair.eu\r\n");
+    client.print("Connection: close\r\n");
+    client.print("Authorization: ");
+    client.println(hackair_api_token);
+    client.print("Accept: application/vnd.hackair.v1+json\r\n");
+    client.print("Cache-Control: no-cache\r\n");
+    client.print("Content-Type: application/json\r\n");
+    client.print("Content-Length: ");
+    client.println(dataJson.length() + 2);
+    client.println("");
+    client.println(dataJson);
+    Serial.println(dataJson);
+    delay(500);
+
+    while (client.available()) {
+      char c = client.read();
+      Serial.print(c);
+    }
+    client.stop();
+  } else {
+    Serial.println("Unable to send data to hackAIR platform\n");
+  }
+  delay(1000);
+
+  // Send data to openSenseMap
+  if (sensebox_id != "" && osem_token != "") {
+    // Send the data to the openSenseMap server
+    Serial.println("Sending data to openSenseMap platform...");
+    Serial.println(sensebox_id);
+    Serial.println("OSEM:\n");
+    Serial.println(osem_token);
+    Serial.println("\nEND\n");
+
+    if (client.connect("api.opensensemap.org", 443)) {
+      Serial.println("Connected to api.opensensemap.org");
+      client.print("POST /boxes/");
+      client.print(sensebox_id);
+      client.print("/data?hackair=true HTTP/1.1\r\n");
+      client.print("Host: api.opensensemap.org\r\n");
       client.print("Connection: close\r\n");
       client.print("Authorization: ");
-      client.println(hackair_api_token);
-      client.print("Accept: application/vnd.hackair.v1+json\r\n");
+      client.println(osem_token);
       client.print("Cache-Control: no-cache\r\n");
       client.print("Content-Type: application/json\r\n");
       client.print("Content-Length: ");
@@ -297,85 +334,47 @@ void loop() {
         char c = client.read();
         Serial.print(c);
       }
-      client.stop();
-    } else {
-      Serial.println("Unable to send data to hackAIR platform\n");
     }
+    client.stop();
     delay(1000);
-
-    // Send data to openSenseMap
-    if (sensebox_id != "" && osem_token != "") {
-      // Send the data to the openSenseMap server
-      Serial.println("Sending data to openSenseMap platform...");
-      Serial.println(sensebox_id);
-      Serial.println("OSEM:\n");
-      Serial.println(osem_token);
-      Serial.println("\nEND\n");
-
-      if (client.connect("api.opensensemap.org", 443)) {
-        Serial.println("Connected to api.opensensemap.org");
-        client.print("POST /boxes/");
-        client.print(sensebox_id);
-        client.print("/data?hackair=true HTTP/1.1\r\n");
-        client.print("Host: api.opensensemap.org\r\n");
-        client.print("Connection: close\r\n");
-        client.print("Authorization: ");
-        client.println(osem_token);
-        client.print("Cache-Control: no-cache\r\n");
-        client.print("Content-Type: application/json\r\n");
-        client.print("Content-Length: ");
-        client.println(dataJson.length() + 2);
-        client.println("");
-        client.println(dataJson);
-        Serial.println(dataJson);
-        delay(500);
-
-        while (client.available()) {
-          char c = client.read();
-          Serial.print(c);
-        }
-      }
-      client.stop();
-      delay(1000);
-    } else {
-      Serial.println("Unable to send data to openSenseMap platform\n");
-    }
   } else {
-    // DEBUG is on, output values to serial but don't send to network
-    Serial.println("DEBUG");
-    Serial.println(DEBUG);
-    Serial.print("hackair API token: ");
-    Serial.println(hackair_api_token); // write API token
-    Serial.print("Chip ID: ");
-    Serial.println(chip_id);
-    Serial.print("Temperature: ");
-    Serial.println(env_temp);
-    Serial.print("Humidity: ");
-    Serial.println(env_hum);
-    Serial.println(dataJson); // write sensor values to serial for debug
+    Serial.println("Unable to send data to openSenseMap platform\n");
+  }
+#else // DEBUG_MODE
+  // DEBUG is on, output values to serial but don't send to network
+  Serial.println("DEBUG");
+  Serial.print("hackair API token: ");
+  Serial.println(hackair_api_token); // write API token
+  Serial.print("Chip ID: ");
+  Serial.println(chip_id);
+  Serial.print("Temperature: ");
+  Serial.println(env_temp);
+  Serial.print("Humidity: ");
+  Serial.println(env_hum);
+  Serial.println(dataJson); // write sensor values to serial for debug
 
 #ifdef INFLUXDB_SUPPORT
-    // connect to influxdb
-    Influxdb influx(INFLUXDB_HOST); // port defaults to 8086
-    influx.setDbAuth(INFLUXDB_DATABASE, INFLUXDB_USER, INFLUXDB_PASS); // with authentication
+  // connect to influxdb
+  Influxdb influx(INFLUXDB_HOST); // port defaults to 8086
+  influx.setDbAuth(INFLUXDB_DATABASE, INFLUXDB_USER, INFLUXDB_PASS); // with authentication
 
-    String influx_chip_id = String(chip_id);
+  String influx_chip_id = String(chip_id);
 
-    // create a measurement object
-    InfluxData measurement("airquality");
-    measurement.addTag("device", influx_chip_id);
-    measurement.addTag("sensor", "sds11");
-    measurement.addValue("pm10", data.pm10);
-    measurement.addValue("pm25", data.pm25);
-    measurement.addValue("temperature", env_temp);
-    measurement.addValue("humidity", env_hum);
+  // create a measurement object
+  InfluxData measurement("airquality");
+  measurement.addTag("device", influx_chip_id);
+  measurement.addTag("sensor", "sds11");
+  measurement.addValue("pm10", data.pm10);
+  measurement.addValue("pm25", data.pm25);
+  measurement.addValue("temperature", env_temp);
+  measurement.addValue("humidity", env_hum);
 
-    // write it into db
-    influx.write(measurement);
+  // write it into db
+  influx.write(measurement);
 
-    client.println("Writing to InfluxDB");
+  client.println("Writing to InfluxDB");
 #endif // INFLUXDB_SUPPORT
-  }
+#endif // DEBUG_MODE
 
   // Turn off sensor and go to sleep
   sensor.turnOff();
